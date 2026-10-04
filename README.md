@@ -1,96 +1,114 @@
 # Explainable Multi-Label Chest X-Ray Diagnosis
 
-Multi-label classification of 14 thoracic pathologies from chest radiographs, with Grad-CAM localization evaluated against radiologist-drawn bounding boxes.
+Multi-label classification of 14 thoracic pathologies from chest radiographs (NIH ChestX-ray14), with Grad-CAM explanations evaluated against radiologist-drawn bounding boxes.
 
-Samsung Innovation Campus · Misk — Team Core.
+Samsung Innovation Campus AI Capstone Project, Team Core (6 members).
 
-Dataset: NIH ChestX-ray14, a stratified 31,077-image subset covering 11,907 patients.
+> Research prototype. Not intended, validated, or suitable for clinical use.
+
+**Final model:** ConvNeXt-Tiny 320×320. **Test macro AUROC 0.8158**, evaluated on a patient-level split with zero patient leakage.
 
 ---
 
-## Data splits
+## My contribution: Data Engineer
 
-Five patient-level splits. Splitting is defined over patients rather than images because one patient can hold many studies — mixing them across train and test lets the network identify the individual instead of the pathology.
+I owned the data foundation the whole project was trained and evaluated on: dataset construction, the split design, and the integrity of the evaluation protocol.
 
-| Split | Images | Patients | Purpose |
-|---|---|---|---|
-| `train` | 18,013 | 7,930 | Training |
-| `val` | 3,978 | 1,699 | Hyperparameters and thresholds |
-| `test` | 3,904 | 1,700 | Final classification results |
-| `loc_tune` | 2,606 | 289 | Grad-CAM threshold selection |
-| `loc_report` | 2,576 | 289 | Final localization results |
+- **Rarity-aware subset construction.** I built a 31,077-image working subset from the full NIH ChestX-ray14 dataset, constructed so that rare pathologies (e.g. Hernia, Pneumonia) keep enough examples to be learnable and measurable across all 14 classes. <!-- [CONFIRM: add your exact sampling rule, e.g. minimum images per class] -->
+- **Patient-level stratified splitting with zero leakage.** I split 11,907 patients into train/val/test so that no patient appears in more than one split. Image-level splitting on ChestX-ray14 leaks patients across splits and inflates AUROC.
+- **Isolated localization splits.** I separated every bounding-box-annotated patient into two dedicated splits, `loc_tune` and `loc_report`. This lets the Grad-CAM heatmap threshold be selected on `loc_tune` and frozen before evaluation on `loc_report`, so the reported localization numbers are never tuned on the data they are reported on.
+- **Preprocessing.** I wrote `notebooks/01_data_preparation.ipynb`, which covers extraction, label parsing, subset construction, splitting, and split export.
+- **Evaluation-protocol review.** I identified that the original evaluation plan specified IoU for Grad-CAM localization, while IoBB is the standard metric for this benchmark (Wang et al., ChestX-ray8). The final evaluation uses IoBB.
+- **Centered-box control.** <!-- [CONFIRM ownership — keep only if this was your work; otherwise move to the team section] --> I compared Grad-CAM boxes against a fixed centered box. IoBB divides by the *predicted* box area, so small boxes inside large ground-truth regions (e.g. Cardiomegaly) can score high regardless of what the model attends to. The control separates genuine localization signal from this metric artifact. <!-- [ADD: control results vs Grad-CAM, per class if available] -->
+- **Pipeline QA.** I caught a silent class-drop bug in the Grad-CAM code before final evaluation.
+- **Infrastructure.** I migrated the team workflow from Colab and Google Drive to Kaggle with private datasets.
 
-All ten pairwise combinations return zero shared patients.
+---
 
-Patients holding radiologist-annotated bounding boxes are withheld from the classification splits entirely and used only for Grad-CAM evaluation, split evenly so the localization threshold is never selected on the data it is reported against.
+## Data
 
-**The model has 14 outputs.** `No Finding` is the absence of the fourteen pathologies, not a class.
+The working subset is NIH ChestX-ray14: **31,077 X-rays from 11,907 patients**. All splits are defined at the patient level.
+
+| Split        | Images | Patients | Purpose                                        |
+| ------------ | ------ | -------- | ---------------------------------------------- |
+| `train`      | 18,013 | 7,930    | Model training                                 |
+| `val`        | 3,978  | 1,699    | Hyperparameters and per-class decision thresholds |
+| `test`       | 3,904  | 1,700    | Final classification evaluation                |
+| `loc_tune`   | 2,606  | 289      | Grad-CAM threshold selection                   |
+| `loc_report` | 2,576  | 289      | Final localization evaluation                  |
+
+The split files (image IDs and labels only) are in [`splits/`](splits/), so anyone who downloads ChestX-ray14 from NIH can reproduce the exact partition. The images themselves are not redistributed here.
+
+The model has 14 outputs: Atelectasis, Consolidation, Infiltration, Pneumothorax, Edema, Emphysema, Fibrosis, Effusion, Pneumonia, Pleural_Thickening, Cardiomegaly, Nodule, Mass, and Hernia. `No Finding` is derived when no class crosses its threshold.
+
+---
+
+## Results (team)
+
+### Classification
+
+| Model             | Input   | Test Macro AUROC |
+| ----------------- | ------- | ---------------- |
+| ResNet50          | 224×224 | ~0.783           |
+| DenseNet-121      | 224×224 | ~0.796           |
+| **ConvNeXt-Tiny** | 320×320 | **0.8158**       |
+
+| ConvNeXt-Tiny metric        | Value      |
+| --------------------------- | ---------- |
+| Macro F1 @ 0.50             | 0.3034     |
+| Macro F1 @ tuned thresholds | **0.4236** |
+| Macro ECE                   | **0.0258** |
+
+### Localization (Grad-CAM, IoBB on `loc_report`)
+
+| Metric      | Value |
+| ----------- | ----- |
+| Mean IoBB   | 0.417 |
+| IoBB ≥ 0.50 | 39.4% |
+
+Performance varies strongly by class, from Cardiomegaly (mean IoBB 0.886) down to Nodule (0.065). Full per-class results, the Grad-CAM implementation, and example heatmaps are in Layan Alazwari's XAI repository:
+→ https://github.com/l136758/explainable-multilabel-chest-xray
 
 ---
 
 ## Repository
 
-    notebooks/
-      01_data_preparation.ipynb          Patient-level splitting (Colab; run and frozen)
-      02_densenet_baseline.ipynb         DenseNet-121 training, 224x224
-      03_evaluation.ipynb                Per-class metrics, CIs, threshold calibration (DenseNet)
-      04_resnet50_baseline.ipynb         ResNet50 training, 224x224
-      05_resnet_evaluation.ipynb         ResNet50 scored with the same pipeline
-      convnext-tiny-320-training.ipynb   ConvNeXt-Tiny training, 320x320, threshold tuning, calibration, robustness
-    docs/
-      convnext_experiment_summary.md     Full write-up of the ConvNeXt-Tiny run: config, results, BCE vs focal loss, robustness
-      frontend_backend_handoff.md        Proposed frontend/backend integration contract and open decisions
-    frontend/
-      README.md                          Frontend status, local run instructions, and integration notes
-      index.html                         Landing page
-      analyze.html                       X-ray analysis interface
-      css/styles.css                     Frontend design system
-      js/config.js                       Frontend configuration and mock/backend switch
-      js/api.js                          API client and response validation
-      js/analyze.js                      Analysis-page UI logic
-      mocks/prediction.json              Mock inference response used before backend integration
-    results/                             Per-class thresholds and evaluation output for every model
+```
+notebooks/
+  01_data_preparation.ipynb        Subset construction + patient-level splits   [my work]
+  02_densenet_baseline.ipynb       DenseNet-121 baseline                         [team]
+  04_resnet50_baseline.ipynb       ResNet50 baseline                             [team]
+  convnext-tiny-320-training.ipynb Final ConvNeXt-Tiny model                     [team]
+  convnext-gradcam-localization.ipynb  Grad-CAM + IoBB evaluation               [team]
+splits/                            train/val/test/loc_tune/loc_report CSVs       [my work]
+backend/                           FastAPI backend                               [team]
+frontend/                          HTML/CSS/JS frontend                          [team]
+results/                           Classification and localization outputs       [team]
+```
 
-Notebooks other than `01_data_preparation.ipynb` run on Kaggle. Attach both datasets as inputs, enable a GPU, and run in order.
-
-Data and checkpoints are hosted on Kaggle, not committed here:
-
-- Splits and image index — `iwmm10/chestxray-capstone-splits`
-- Model checkpoints — `iwmm10/baseline`
-- Images — `nih-chest-xrays/data` (public)
+<!-- [ADJUST to match the actual files in your fork] -->
 
 ---
 
-## Models trained so far
+## Team Core
 
-Three single-model candidates have been trained and scored on the same patient-level test split. All three predict the same 14 pathologies, evaluated at their own validation-tuned per-class thresholds.
+| Team member         | Primary contribution                                          |
+| ------------------- | ------------------------------------------------------------- |
+| Rabeh Almutairi     | Team leadership, final ConvNeXt-Tiny model development        |
+| **Mohammed Almalki**| **Data engineering, subset construction, patient-level and localization split design** |
+| Abdullah Alsalhi    | ResNet50 baseline, GitHub workflow/setup                      |
+| Layan Alazwari      | Grad-CAM integration and IoBB localization evaluation         |
+| Deema Omar Alquwaei | FastAPI backend                                               |
+| Layan Allhidean     | HTML/CSS/JavaScript frontend and API integration              |
 
-| Model | Resolution | Test Macro AUROC | Notebook | Thresholds |
-|---|---|---:|---|---|
-| DenseNet-121 | 224x224 | ~0.795 | `02_densenet_baseline.ipynb` / `03_evaluation.ipynb` | `results/thresholds_densenet.json` |
-| ResNet50 | 224x224 | ~0.783 | `04_resnet50_baseline.ipynb` / `05_resnet_evaluation.ipynb` | `results/thresholds_resnet50.json` |
-| **ConvNeXt-Tiny (BCE)** | 320x320 | **0.8158** | `convnext-tiny-320-training.ipynb` | `results/convnext_thresholds.json` |
-
-**ConvNeXt-Tiny is currently the strongest single-model candidate** and the recommended checkpoint to build on for Grad-CAM / IoBB and downstream work — it has the best AUROC, threshold-tuned macro F1 (0.4236 vs 0.3034 at a naive 0.5 cutoff), and a well-calibrated output (test macro ECE 0.0258, so no temperature scaling was needed). A focal-loss variant was also tried and rejected — it scored marginally higher on macro AUROC (0.8145 vs 0.8121 on validation) but was worse on 8 of 14 individual pathologies, so BCE was kept. Full details, per-class AUROC, and a sex/age/view-position robustness breakdown are in `docs/convnext_experiment_summary.md` and `results/convnext_robustness_summary.csv`.
-
-Known weak spots on the ConvNeXt model, relevant to anyone building on it: Pneumonia (AUROC 0.696) and Infiltration (AUROC 0.708) remain the hardest classes, and AUROC drops for patients 60+ (and especially the 80+ group, though that subgroup is only 54 images).
-
-The ConvNeXt-Tiny checkpoint referenced by the notebook (`convnext_tiny_320_best.pth`) is not committed to git — it lives as a Kaggle notebook output and needs to be re-attached as a Kaggle input dataset for anyone continuing from it.
+Original team repository: https://github.com/ABDULLHALSALHI/team-core-chest-xray
 
 ---
 
-## Status
+## Limitations
 
-**Classification / model pipeline — complete for the current frozen single-model choice.** Dataset construction, patient-level splitting, DenseNet-121 and ResNet50 baselines, ConvNeXt-Tiny 320 training (BCE and focal-loss variants), per-class evaluation with bootstrap confidence intervals, pathology-specific threshold tuning, probability calibration (ECE), and demographic robustness analysis are available in the repository.
-
-**Frontend — implemented in mock mode.** The user interface is built with plain HTML, CSS, and JavaScript and currently supports the landing page, X-ray upload flow, sorted flagged findings, all 14 model scores, developer diagnostics, and a prototype summary export. It intentionally does not duplicate PyTorch preprocessing or inference logic in the browser.
-
-**Integration — pending.** The frontend is waiting for the final FastAPI request/response contract and class-specific Grad-CAM delivery format before `MOCK_MODE` is switched off. The proposed contract and open integration decisions are documented in `docs/frontend_backend_handoff.md`.
-
-**Grad-CAM / IoBB and backend work are separate team workstreams.** Their implementation status should be updated in this README when those artifacts are merged into the repository.
-
-The final application must remain a research/educational prototype and should not be presented as a clinically validated diagnostic system.
-
----
-
-*Research prototype. Not intended, validated, or suitable for clinical use.*
+- This is a research and educational prototype, not a clinically validated diagnostic system.
+- ChestX-ray14 labels were NLP-mined from radiology reports and are noisy, which caps achievable accuracy.
+- Quantitative localization covers only the 8 pathologies with bounding-box annotations.
+- Grad-CAM shows which regions influenced a prediction. It does not confirm where the disease is.
+- No external-dataset validation (e.g. CheXpert, MIMIC-CXR).
